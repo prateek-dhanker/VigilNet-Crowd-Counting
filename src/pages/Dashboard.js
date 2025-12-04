@@ -97,6 +97,9 @@ function Dashboard() {
   const GREEN = "#22c55e";
   const RED = "#ef4444";
   const AMBER = "#facc15";
+  const LENS_ALERT = "#a855f7";   // violet for lens_covered_or_extremely_dark
+  const FREEZE_ALERT = "#f97316"; // orange for camera_frozen
+
 
   const styles = {
     page: {
@@ -428,21 +431,59 @@ function Dashboard() {
   };
 
   // custom dot renderer for line charts based on thresholds
+  // const renderColoredDot = (props) => {
+  //   const { cx, cy, payload } = props;
+  //   const value = payload.count;
+  //   let fill = "#60a5fa";
+
+  //   if (thresholdsActive) {
+  //     if (value > parsedMax) fill = RED; // alert
+  //     else if (value >= parsedMin && value <= parsedMax) fill = GREEN; // safe
+  //     else fill = AMBER; // below min
+  //   }
+
+  //   return (
+  //     <circle cx={cx} cy={cy} r={3} fill={fill} stroke={BG} strokeWidth={1} />
+  //   );
+  // };
+  // custom dot renderer for line charts based on thresholds + alert type
   const renderColoredDot = (props) => {
     const { cx, cy, payload } = props;
     const value = payload.count;
-    let fill = "#60a5fa";
 
-    if (thresholdsActive) {
+    // alert can be: "lens_covered_or_extremely_dark", "camera_frozen", or empty/undefined
+    const alertType = payload.alert ? String(payload.alert).trim() : "";
+
+    let fill = "#60a5fa"; // default blue-ish
+    let radius = 3;
+
+    if (alertType === "lens_covered_or_extremely_dark") {
+      // camera covered / extremely dark -> violet dot
+      fill = LENS_ALERT;
+      radius = 5;
+    } else if (alertType === "camera_frozen") {
+      // camera frozen -> orange dot
+      fill = FREEZE_ALERT;
+      radius = 5;
+    } else if (thresholdsActive) {
+      // fallback to threshold-based coloring if no explicit alert
       if (value > parsedMax) fill = RED; // alert
       else if (value >= parsedMin && value <= parsedMax) fill = GREEN; // safe
       else fill = AMBER; // below min
     }
 
     return (
-      <circle cx={cx} cy={cy} r={3} fill={fill} stroke={BG} strokeWidth={1} />
+      <circle
+        cx={cx}
+        cy={cy}
+        r={radius}
+        fill={fill}
+        stroke={BG}
+        strokeWidth={1}
+      />
     );
   };
+
 
   // ---------- Filter helpers ----------
 
@@ -881,7 +922,12 @@ function Dashboard() {
                 <div style={styles.graphSubtitle}>
                   Expected format:&nbsp;
                   <code>date, timestamp_ns, frame_index, count</code>
+                  <br />
+                  Or<br />
+                  <code>date, timestamp_ns, frame_index, count, alert</code>
                 </div>
+
+
 
                 <input
                   type="file"

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 
+const API_BASE = "http://localhost:8000"; // backend URL
+
 function useWindowWidth() {
   const [width, setWidth] = useState(window.innerWidth);
   useEffect(() => {
@@ -18,18 +20,17 @@ function MainPage({ user }) {
   const systemSettingsRef = useRef(null);
 
   const [selectedSystemCamera, setSelectedSystemCamera] = useState("");
-  const [uploadedVideoURL, setUploadedVideoURL] = useState(null);
+  // const [uploadedVideoURL, setUploadedVideoURL] = useState(null);
+  const [uploadedVideoFile, setUploadedVideoFile] = useState(null);
 
-  // map: pairId -> crowd_txt content
   const [crowdTxtMap, setCrowdTxtMap] = useState({});
+  const [pollTimers, setPollTimers] = useState({});
 
   const width = useWindowWidth();
   const isMobile = width < 700;
 
-
-  // --- SAMPLE CSV STREAM (for sample right side) ---
   const sampleCsvText = `
-Date,Timestamp_ns,Frame_index,Count
+Date,Timestamp_ns,Frame_index,Count,Alert
 2025-03-01,00:00:000,0,150.114
 2025-03-01,00:00:400,10,138.108
 2025-03-01,00:00:800,20,160.500
@@ -39,12 +40,12 @@ Date,Timestamp_ns,Frame_index,Count
 2025-03-01,00:02:400,60,159.002
 2025-03-01,00:02:800,70,147.661
 2025-03-01,00:03:200,80,153.441
-2025-03-01,00:03:600,90,148.997
-2025-03-01,00:04:000,100,157.884
-2025-03-01,00:04:400,110,142.660
+2025-03-01,00:03:600,90,148.997,lens_covered_or_extremely_dark
+2025-03-01,00:04:000,100,157.884,lens_covered_or_extremely_dark
+2025-03-01,00:04:400,110,142.660,lens_covered_or_extremely_dark
 2025-03-01,00:04:800,120,151.225
-2025-03-01,00:05:200,130,158.331
-2025-03-01,00:05:600,140,144.880
+2025-03-01,00:05:200,130,158.331,camera_frozen
+2025-03-01,00:05:600,140,144.880,camera_frozen
 2025-03-01,00:06:000,150,156.102
 2025-03-01,00:06:400,160,139.556
 2025-03-01,00:06:800,170,153.774
@@ -54,27 +55,32 @@ Date,Timestamp_ns,Frame_index,Count
 `.trim();
 
   const sampleCsvLines = sampleCsvText.split("\n");
-  const [sampleCsvIndex, setSampleCsvIndex] = useState(1); // start after header
+  const [sampleCsvIndex, setSampleCsvIndex] = useState(1);
   const [sampleCsvDisplay, setSampleCsvDisplay] = useState([sampleCsvLines[0]]);
 
-  // simulate real-time CSV writing for sample right pane
+  // Simulate sample CSV streaming (for pairId 0 right side)
   useEffect(() => {
     const interval = setInterval(() => {
       setSampleCsvDisplay((prev) => {
-        // When we reach end, reset to only header again
         if (sampleCsvIndex >= sampleCsvLines.length) {
           setSampleCsvIndex(1);
           return [sampleCsvLines[0]];
         }
-        // otherwise append next line
         const nextLine = sampleCsvLines[sampleCsvIndex];
         setSampleCsvIndex((i) => i + 1);
         return [...prev, nextLine];
       });
-    }, 400); // every 400ms, adjust speed if you like
-
+    }, 400);
     return () => clearInterval(interval);
-  }, [sampleCsvLines.length, sampleCsvIndex]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sampleCsvIndex]);
+
+  // Clear polling timers on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(pollTimers).forEach((id) => clearInterval(id));
+    };
+  }, [pollTimers]);
 
   const styles = {
     page: {
@@ -91,7 +97,6 @@ Date,Timestamp_ns,Frame_index,Count
       animation: "fadeInDown 0.6s",
       boxSizing: "border-box",
     },
-
     welcomeRow: {
       display: "flex",
       flexDirection: isMobile ? "column" : "row",
@@ -117,7 +122,6 @@ Date,Timestamp_ns,Frame_index,Count
       fontSize: 13,
       color: "#6b7280",
     },
-
     cameraPairsContainer: {
       display: "flex",
       flexDirection: "column",
@@ -185,8 +189,6 @@ Date,Timestamp_ns,Frame_index,Count
       borderRadius: "14px",
       backgroundColor: "#000",
     },
-
-    // CSV view on right side (non-sample model card)
     csvBox: {
       width: "100%",
       height: "100%",
@@ -213,7 +215,6 @@ Date,Timestamp_ns,Frame_index,Count
       overflowY: "auto",
       paddingRight: 4,
     },
-
     cameraSettings: {
       marginTop: 8,
       padding: isMobile ? "0 10px" : "0 18px",
@@ -231,7 +232,6 @@ Date,Timestamp_ns,Frame_index,Count
       fontSize: isMobile ? 13 : 14,
       color: "#e5e7eb",
     },
-
     deleteCameraBtn: {
       position: "absolute",
       top: 20,
@@ -246,7 +246,6 @@ Date,Timestamp_ns,Frame_index,Count
       fontSize: 11,
       zIndex: 10,
     },
-
     buttonRow: {
       marginTop: isMobile ? 20 : 28,
       display: "flex",
@@ -268,7 +267,6 @@ Date,Timestamp_ns,Frame_index,Count
       letterSpacing: "0.03em",
       minWidth: isMobile ? "100%" : 210,
     },
-
     addCameraBtn: {
       marginTop: 16,
       backgroundColor: "#111827",
@@ -282,7 +280,6 @@ Date,Timestamp_ns,Frame_index,Count
       minWidth: isMobile ? "100%" : 260,
       alignSelf: "center",
     },
-
     sidePanel: {
       position: isMobile ? "static" : "fixed",
       top: isMobile ? undefined : 96,
@@ -316,7 +313,6 @@ Date,Timestamp_ns,Frame_index,Count
       fontSize: 13,
       cursor: "pointer",
     },
-
     systemSelect: {
       width: "100%",
       padding: 8,
@@ -327,30 +323,33 @@ Date,Timestamp_ns,Frame_index,Count
       marginBottom: 12,
       fontSize: 13,
     },
-
     uploadInput: {
       marginTop: 4,
       marginBottom: 10,
       fontSize: 13,
     },
+    downloadBtn: {
+      padding: "4px 10px",
+      fontSize: 11,
+      borderRadius: 999,
+      border: "1px solid #4b5563",
+      backgroundColor: "#020617",
+      color: "#ef1111ff",
+      cursor: "pointer",
+      marginLeft: 8,
+      whiteSpace: "nowrap",
+      opacity: 0.9,
+    },
+    downloadBtnDisabled: {
+      opacity: 0.4,
+      cursor: "not-allowed",
+    },
 
-    "@keyframes fadeInDown": {
-      from: { opacity: 0, transform: "translateY(-24px)" },
-      to: { opacity: 1, transform: "translateY(0)" },
-    },
-    "@keyframes fadeInUp": {
-      from: { opacity: 0, transform: "translateY(24px)" },
-      to: { opacity: 1, transform: "translateY(0)" },
-    },
-    "@keyframes fadeIn": {
-      from: { opacity: 0 },
-      to: { opacity: 1 },
-    },
   };
 
   const [cameraPairs, setCameraPairs] = useState([
     {
-      pairId: 0, // base sample cameras (do not touch)
+      pairId: 0,
       cameras: [
         {
           id: 0,
@@ -424,54 +423,92 @@ Date,Timestamp_ns,Frame_index,Count
     );
   };
 
-  // Upload video for REAL camera (left) => backend processes, we show CSV on right
+  // Upload + live CSV polling
   const uploadVideoFile = async (pairId, cameraId, file) => {
-    const formData = new FormData();
-    formData.append("video", file);
+  if (!file) return;
 
-    try {
-      const res = await fetch("http://0.0.0.0:8000/process_video/", {
-        method: "POST",
-        body: formData,
-      });
+  const formData = new FormData();
+  formData.append("video", file); // 👈 MUST be "video" to match backend
 
-      // even if backend returns output_video, we ignore it for non-sample
-      await res.json().catch(() => null);
-
-      // Left side (real) shows uploaded video as before
-      setCameraPairs((pairs) =>
-        pairs.map((pair) =>
-          pair.pairId === pairId
-            ? {
-              ...pair,
-              cameras: pair.cameras.map((cam) =>
-                cam.id === cameraId
-                  ? {
+  // show video immediately on left
+  setCameraPairs((pairs) =>
+    pairs.map((pair) =>
+      pair.pairId === pairId
+        ? {
+            ...pair,
+            cameras: pair.cameras.map((cam) =>
+              cam.id === cameraId
+                ? {
                     ...cam,
                     src: URL.createObjectURL(file),
                     uploadedFile: file,
                   }
-                  : cam
-              ),
-            }
-            : pair
-        )
-      );
+                : cam
+            ),
+          }
+        : pair
+    )
+  );
 
-      // Right side (model) shows live crowd_txt CSV
-      fetch("http://0.0.0.0:8000/crowd_txt/")
-        .then((r) => r.text())
-        .then((txt) => {
-          setCrowdTxtMap((prev) => ({
-            ...prev,
-            [pairId]: txt,
-          }));
-        })
-        .catch(() => { });
-    } catch (err) {
-      console.error("Error processing video:", err);
+  let runId;
+  try {
+    const res = await fetch(`${API_BASE}/process_video/`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      console.error("process_video failed:", res.status, await res.text());
+      return;
     }
+    const data = await res.json();
+    runId = data.run_id;
+    if (!runId) {
+      console.error("No run_id returned from backend:", data);
+      return;
+    }
+  } catch (err) {
+    console.error("Error starting processing:", err);
+    return;
+  }
+
+  // stop old poller for this pair
+  if (pollTimers[pairId]) {
+    clearInterval(pollTimers[pairId]);
+  }
+
+  let intervalId;
+
+  const poll = () => {
+    fetch(`${API_BASE}/crowd_txt/?run_id=${encodeURIComponent(runId)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data) return;
+        const { csv, done } = data;
+
+        setCrowdTxtMap((prev) => ({
+          ...prev,
+          [pairId]: csv || "",
+        }));
+
+        if (done && intervalId) {
+          clearInterval(intervalId);
+          setPollTimers((prev) => {
+            const copy = { ...prev };
+            delete copy[pairId];
+            return copy;
+          });
+        }
+      })
+      .catch((err) => {
+        console.error("Error fetching crowd_txt:", err);
+      });
   };
+
+  intervalId = setInterval(poll, 500);
+  setPollTimers((prev) => ({ ...prev, [pairId]: intervalId }));
+  poll(); // first immediate call
+};
+
 
   const addCameraPair = () => {
     const newPairId = cameraPairs.length
@@ -490,7 +527,7 @@ Date,Timestamp_ns,Frame_index,Count
           {
             id: baseCamId + 1,
             name: `Camera ${newPairId} - Real`,
-            src: "https://placeimg.com/640/480/nature",
+            src: "",
             on: true,
             uploadedFile: null,
           },
@@ -507,7 +544,18 @@ Date,Timestamp_ns,Frame_index,Count
   };
 
   const deleteCameraPair = (pairId) => {
-    if (pairId === 0) return; // don't delete sample pair
+    if (pairId === 0) return;
+
+    // stop polling for this pair
+    if (pollTimers[pairId]) {
+      clearInterval(pollTimers[pairId]);
+      setPollTimers((prev) => {
+        const copy = { ...prev };
+        delete copy[pairId];
+        return copy;
+      });
+    }
+
     setCameraPairs((pairs) => pairs.filter((pair) => pair.pairId !== pairId));
     setCrowdTxtMap((prev) => {
       const copy = { ...prev };
@@ -530,14 +578,16 @@ Date,Timestamp_ns,Frame_index,Count
           {
             id: newPairId * 2 - 1,
             name: `${selectedSystemCamera} - Real`,
-            src: "https://placeimg.com/640/480/tech",
+            src: "",
             on: true,
+            uploadedFile: null,
           },
           {
             id: newPairId * 2,
             name: `${selectedSystemCamera}b - Crowd CSV`,
             src: "",
             on: true,
+            uploadedFile: null,
           },
         ],
       },
@@ -546,39 +596,80 @@ Date,Timestamp_ns,Frame_index,Count
     setSystemSettingsOpen(false);
   };
 
-  const addUploadedVideo = () => {
-    if (!uploadedVideoURL) return;
-    const newPairId = cameraPairs.length
-      ? cameraPairs[cameraPairs.length - 1].pairId + 1
-      : 1;
+  // const addUploadedVideo = () => {
+  //   if (!uploadedVideoFile) return;
 
-    setCameraPairs((prev) => [
-      ...prev,
-      {
-        pairId: newPairId,
-        cameras: [
-          {
-            id: newPairId * 2 - 1,
-            name: `Uploaded Video ${newPairId} - Real`,
-            src: uploadedVideoURL,
-            on: true,
-          },
-          {
-            id: newPairId * 2,
-            name: `Uploaded Video ${newPairId}b - Crowd CSV`,
-            src: "",
-            on: true,
-          },
-        ],
-      },
-    ]);
-    setUploadedVideoURL(null);
-    setSystemSettingsOpen(false);
+  //   const newPairId = cameraPairs.length
+  //     ? cameraPairs[cameraPairs.length - 1].pairId + 1
+  //     : 1;
+  //   const baseCamId = cameraPairs.reduce(
+  //     (max, pair) => Math.max(max, ...pair.cameras.map((c) => c.id)),
+  //     0
+  //   );
+  //   const leftCamId = baseCamId + 1;
+  //   const rightCamId = baseCamId + 2;
+
+  //   setCameraPairs((prev) => [
+  //     ...prev,
+  //     {
+  //       pairId: newPairId,
+  //       cameras: [
+  //         {
+  //           id: leftCamId,
+  //           name: `Uploaded Video ${newPairId} - Real`,
+  //           src: "",
+  //           on: true,
+  //           uploadedFile: null,
+  //         },
+  //         {
+  //           id: rightCamId,
+  //           name: `Uploaded Video ${newPairId}b - Crowd CSV`,
+  //           src: "",
+  //           on: true,
+  //           uploadedFile: null,
+  //         },
+  //       ],
+  //     },
+  //   ]);
+
+  //   // start upload + CSV polling for this pair
+  //   uploadVideoFile(newPairId, leftCamId, uploadedVideoFile);
+
+  //   setUploadedVideoURL(null);
+  //   setUploadedVideoFile(null);
+  //   setSystemSettingsOpen(false);
+  // };
+
+
+  const downloadCsvForPair = (pairId, cameraName) => {
+    const csvText = crowdTxtMap[pairId];
+    if (!csvText) {
+      alert("No CSV data available yet for this camera.");
+      return;
+    }
+
+    // make a safe filename from camera name
+    const safeName =
+      (cameraName || "crowd_output").toLowerCase().replace(/[^a-z0-9]+/g, "_") ||
+      "crowd_output";
+
+    const blob = new Blob([csvText], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `${safeName}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
+
 
   return (
     <div style={styles.page}>
-      {/* Top: welcome */}
       <div style={styles.welcomeRow}>
         <div>
           <div style={styles.brandTitle}>VigilNet</div>
@@ -589,7 +680,6 @@ Date,Timestamp_ns,Frame_index,Count
         </div>
       </div>
 
-      {/* Camera pairs */}
       <div style={styles.cameraPairsContainer}>
         {cameraPairs.map((pair) => {
           const isCamera0 = pair.pairId === 0;
@@ -598,6 +688,16 @@ Date,Timestamp_ns,Frame_index,Count
             <div key={pair.pairId} style={styles.cameraPair}>
               {pair.cameras.map((cam) => {
                 const isModelVideo = cam.name.toLowerCase().includes("b");
+
+                // detect if this camera should be rendered as video
+                const isVideo =
+                  (cam.uploadedFile &&
+                    cam.uploadedFile.type &&
+                    cam.uploadedFile.type.startsWith("video")) ||
+                  (cam.src &&
+                    (cam.src.endsWith(".mp4") ||
+                      cam.src.endsWith(".webm") ||
+                      cam.src.startsWith("blob:")));
 
                 return (
                   <div key={cam.id} style={styles.cameraCard}>
@@ -615,37 +715,74 @@ Date,Timestamp_ns,Frame_index,Count
 
                     <div style={styles.cameraFrame}>
                       {cam.on ? (
-                        // RIGHT card logic
                         isModelVideo ? (
-                          // SAMPLE pair (pairId 0): show simulated CSV stream
                           isCamera0 ? (
                             <div style={styles.csvBox}>
-                              <div style={styles.csvTitle}>Sample Crowd CSV (simulated live)</div>
+                              <div style={styles.csvTitle}>
+                                Sample Crowd CSV (simulated live)
+                              </div>
                               <pre style={styles.csvContent}>
                                 {sampleCsvDisplay.join("\n")}
                               </pre>
                             </div>
                           ) : (
-                            // NON-SAMPLE pair right side: backend crowd_txt
                             <div style={styles.csvBox}>
-                              <div style={styles.csvTitle}>Crowd CSV (live)</div>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  marginBottom: 6,
+                                }}
+                              >
+                                <div style={styles.csvTitle}>Crowd CSV (live)</div>
+                                <button
+                                  type="button"
+                                  onClick={() => downloadCsvForPair(pair.pairId, cam.name)}
+                                  disabled={!crowdTxtMap[pair.pairId]}
+                                  style={{
+                                    ...styles.downloadBtn,
+                                    ...(crowdTxtMap[pair.pairId] ? {} : styles.downloadBtnDisabled),
+                                  }}
+                                >
+                                  Download CSV
+                                </button>
+                              </div>
+
                               <pre style={styles.csvContent}>
                                 {crowdTxtMap[pair.pairId] ||
-                                  "Upload a video on the left to stream crowd.csv from backend."}
+                                  "Upload a video on the left to stream output_with_hinderance.csv from backend."}
                               </pre>
                             </div>
+
                           )
                         ) : (
-                          // LEFT (real) camera: normal video/image feed
                           <>
-                            {cam.src.endsWith(".mp4") || cam.src.endsWith(".webm") ? (
+                            {!cam.src ? (
+                              <div
+                                style={{
+                                  color: "#6b7280",
+                                  fontSize: 13,
+                                  fontStyle: "italic",
+                                }}
+                              >
+                                Upload a video to begin
+                              </div>
+                            ) : isVideo ? (
                               <video
                                 autoPlay
                                 muted
                                 loop
+                                playsInline
+                                disablePictureInPicture
+                                controls={false}
                                 style={styles.cameraVideo}
                                 src={cam.src}
+                                onContextMenu={(e) => e.preventDefault()}
+                                onPause={(e) => e.target.play()}   // force play again
                               />
+
+
                             ) : (
                               <img
                                 style={styles.cameraVideo}
@@ -668,7 +805,6 @@ Date,Timestamp_ns,Frame_index,Count
                       )}
                     </div>
 
-
                     <div style={styles.toggleSwitch}>
                       <label style={styles.toggleLabel}>{cam.name} On/Off</label>
                       <input
@@ -678,7 +814,7 @@ Date,Timestamp_ns,Frame_index,Count
                       />
                     </div>
 
-                    {/* Upload for real videos of non-sample pairs */}
+                    {/* Upload input only for non-sample, left (real) cameras */}
                     {!isModelVideo && !isCamera0 && (
                       <div style={styles.cameraSettings}>
                         <label style={{ fontSize: 13 }}>
@@ -701,7 +837,6 @@ Date,Timestamp_ns,Frame_index,Count
                       </div>
                     )}
 
-                    {/* Delete whole pair (non-sample, only on left card) */}
                     {!isCamera0 && cam.id === pair.cameras[0].id && (
                       <button
                         onClick={() => deleteCameraPair(pair.pairId)}
@@ -719,12 +854,10 @@ Date,Timestamp_ns,Frame_index,Count
         })}
       </div>
 
-      {/* Add camera pair */}
       <button style={styles.addCameraBtn} onClick={addCameraPair}>
         + Add More Camera Pair
       </button>
 
-      {/* Action buttons */}
       <div style={styles.buttonRow}>
         <button
           style={styles.actionButton}
@@ -748,12 +881,13 @@ Date,Timestamp_ns,Frame_index,Count
         </button>
       </div>
 
-      {/* System Settings panel (no sounds now) */}
       {systemSettingsOpen && (
         <div style={styles.sidePanel} ref={systemSettingsRef}>
           <div style={styles.sidePanelTitle}>System Settings</div>
 
-          <label style={{ fontWeight: 600, fontSize: 13 }}>Select Camera:</label>
+          <label style={{ fontWeight: 600, fontSize: 13 }}>
+            Select Camera:
+          </label>
           <select
             value={selectedSystemCamera}
             onChange={(e) => setSelectedSystemCamera(e.target.value)}
@@ -780,39 +914,10 @@ Date,Timestamp_ns,Frame_index,Count
             Add Selected Camera
           </button>
 
-          <label style={{ fontWeight: 600, fontSize: 13 }}>Upload Video:</label>
-          <input
-            type="file"
-            accept="video/*"
-            onChange={(e) => {
-              if (e.target.files && e.target.files[0]) {
-                const fileURL = URL.createObjectURL(e.target.files[0]);
-                setUploadedVideoURL(fileURL);
-              }
-            }}
-            style={styles.uploadInput}
-          />
-
-          {uploadedVideoURL && (
-            <>
-              <video
-                src={uploadedVideoURL}
-                controls
-                style={{
-                  width: "100%",
-                  borderRadius: 12,
-                  marginBottom: 10,
-                  marginTop: 4,
-                }}
-              />
-              <button
-                onClick={addUploadedVideo}
-                style={{ ...styles.actionButton, width: "100%" }}
-              >
-                Add Uploaded Video as Camera Pair
-              </button>
-            </>
-          )}
+          {/* If later you want to re-enable system settings upload: 
+              you can put your previous upload+preview+addUploadedVideo
+              block back here, it will work with the updated logic.
+          */}
 
           <button
             onClick={() => setSystemSettingsOpen(false)}
