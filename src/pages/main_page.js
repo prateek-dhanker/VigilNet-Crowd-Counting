@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import CsvViewer from "../components/CsvViewer";
 
 const API_BASE = "http://localhost:8000"; // backend URL
 
@@ -473,14 +474,14 @@ function MainPage({ user }) {
         cameras: [
           {
             id: baseCamId + 1,
-            name: `Camera ${newPairId} - Real`,
+            name: `Camera ${newPairId}`,
             src: "",
             on: true,
             uploadedFile: null,
           },
           {
             id: baseCamId + 2,
-            name: `Camera ${newPairId}b - Crowd CSV`,
+            name: `Crowd Log ${newPairId}`,
             src: "",
             on: true,
             uploadedFile: null,
@@ -693,10 +694,11 @@ function MainPage({ user }) {
                                 </button>
                               </div>
 
-                              <pre style={styles.csvContent}>
-                                {crowdTxtMap[pair.pairId] ||
-                                  "Upload a video on the left to stream output_with_hinderance.csv from backend."}
-                              </pre>
+                              <CsvViewer
+                                csvText={crowdTxtMap[pair.pairId]}
+                                fallbackMessage="Upload a video on the left to stream output_with_hinderance.csv from backend."
+                                styleOverride={styles.csvContent}
+                              />
                             </div>
 
                           )
@@ -799,7 +801,7 @@ function MainPage({ user }) {
       </div>
 
       <button style={styles.addCameraBtn} onClick={addCameraPair}>
-        + Add Camera Pair
+        + Add New Feed
       </button>
 
       <div style={styles.buttonRow}>
