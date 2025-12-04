@@ -11,9 +11,9 @@ from queue import Queue
 import torch.nn.functional as F
 
 # ---------------- USER SETTINGS ----------------
-MODEL_PATH = r"E:\BTP-1\MCNN\crowd_counting.pth"
-VIDEO_IN   = r"E:\BTP-1\MCNN\people.mp4"
-OUT_CSV    = r"E:\BTP-1\MCNN\count4.csv"
+MODEL_PATH = "crowd_counting.pth"
+VIDEO_IN   = "low_light_video.mp4"
+OUT_CSV    = "low_light_count_after_enhancement.csv"
 
 USE_GPU = True                      # use CUDA if available
 USE_FP16_IF_CUDA = True             # use float16 if using CUDA (speeds inference)
@@ -23,13 +23,53 @@ SMOOTH_WINDOW = 3                   # moving average window for display (0 or 1 
 QUEUE_MAXSIZE = 6                   # frame queue size for reader thread
 FLUSH_INTERVAL = 2.0                # seconds between CSV flushes
 PRINT_EVERY = 50                    # print progress every N processed frames
-UPSAMPLE_DMAP = False        # True = upsample density map to original feed size then sum (best)
-SCALE_BY_AREA = True       # True = multiply sum by area ratio (cheaper)
+UPSAMPLE_DMAP = True        # True = upsample density map to original feed size then sum (best)
+SCALE_BY_AREA = False       # True = multiply sum by area ratio (cheaper)
 # If UPSAMPLE_DMAP is True, SCALE_BY_AREA is ignored.
 # ------------------------------------------------
 
 device = torch.device("cuda" if (USE_GPU and torch.cuda.is_available()) else "cpu")
 print("Device:", device)
+
+def enhance_frame(frame_bgr,
+                  gamma=1.6,
+                  use_clahe=True,
+                  clahe_clip=2.0,
+                  clahe_tile=(8,8),
+                  denoise=False):
+    """
+    Lightweight low-light enhancement:
+      1. Gamma correction (brighten)
+      2. Convert to HSV and apply CLAHE on V channel (local contrast)
+      3. Optional denoising (fastNlMeans)
+      4. Slight global histogram equalization fallback
+    Returns enhanced BGR uint8 image.
+    """
+    img = frame_bgr.copy()
+    # 1) Gamma correction (works well for low-light)
+    if gamma != 1.0:
+        invGamma = 1.0 / gamma
+        table = np.array([((i / 255.0) ** invGamma) * 255
+                          for i in np.arange(256)]).astype("uint8")
+        img = cv2.LUT(img, table)
+
+    # 2) CLAHE on V channel for local contrast boost
+    if use_clahe:
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        h, s, v = cv2.split(hsv)
+        clahe = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=clahe_tile)
+        v_clahe = clahe.apply(v)
+        hsv_clahe = cv2.merge((h, s, v_clahe))
+        img = cv2.cvtColor(hsv_clahe, cv2.COLOR_HSV2BGR)
+
+    # 3) Optional denoise (use sparingly; it blurs small details)
+    if denoise:
+        # faster and simple color denoise
+        img = cv2.fastNlMeansDenoisingColored(img, None, 10, 10, 7, 21)
+
+    # 4) Clip to valid range and return
+    img = np.clip(img, 0, 255).astype(np.uint8)
+    return img
 
 # --- Your model class (same as training) ---
 class MC_CNN(nn.Module):
@@ -193,16 +233,27 @@ with torch.no_grad():
             processed += 1
             continue
 
-        # prepare tensor
-        inp = frame_to_tensor(frame)
+        # enhance the frame and prepare tensor
+        enhanced = enhance_frame(frame, gamma=1.6, use_clahe=True, denoise=False)
+        inp = frame_to_tensor(enhanced)
 
         # forward
         out = model(inp)
+
+        # if using fp16 on CUDA, convert to float for safe ops
+        if device.type == 'cuda' and USE_FP16_IF_CUDA:
+            out_f = out.float()
+        else:
+            out_f = out
+
+        # ensure non-negative density map (safety)
+        out_f = torch.relu(out_f)   # shape 1x1xHxdW
+
         # ensure float32 on CPU for summing if needed
         if device.type == 'cuda' and USE_FP16_IF_CUDA:
-            dmap = out.float().squeeze(0).squeeze(0)
+            dmap = out_f.float().squeeze(0).squeeze(0)
         else:
-            dmap = out.squeeze(0).squeeze(0)
+            dmap = out_f.squeeze(0).squeeze(0)
 
         orig_h, orig_w = frame.shape[:2]
         # feed size is size used to build `inp` tensor
@@ -214,9 +265,9 @@ with torch.no_grad():
 
         # get density map tensor on CPU as float32
         if device.type == 'cuda' and USE_FP16_IF_CUDA:
-            dmap = out.float().squeeze(0).squeeze(0)   # Hd x Wd
+            dmap = out_f.float().squeeze(0).squeeze(0)   # Hd x Wd
         else:
-            dmap = out.squeeze(0).squeeze(0)
+            dmap = out_f.squeeze(0).squeeze(0)
 
         # Option A: upsample density map to original frame size (recommended)
         if UPSAMPLE_DMAP:
